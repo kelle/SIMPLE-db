@@ -62,9 +62,9 @@ def ingest_sources(db, sources, references=None, ras=None, decs=None, comments=N
 
     # SETUP INPUTS
     if ras is None and decs is None:
-        coords = False
+        coords_provided = False
     else:
-        coords = True
+        coords_provided = True
 
     if isinstance(sources, str):
         n_sources = 1
@@ -91,157 +91,23 @@ def ingest_sources(db, sources, references=None, ras=None, decs=None, comments=N
         logger.info(f"Trying to add {n_sources} sources")
 
     # Loop over each source and decide to ingest, skip, or add alt name
-    for i, source in enumerate(sources):
-        # Find out if source is already in database or not
-        if coords and search_db:
-            name_matches = find_source_in_db(db, source, ra=ras[i], dec=decs[i])
-        elif search_db:
-            name_matches = find_source_in_db(db, source)
-        elif not search_db:
-            name_matches = []
+    for source_counter, source in enumerate(sources):
+        # ingest_source function starts here
+        # TODO: figure out counter
+        logger.debug(f"{source_counter}: Trying to ingest {source}")
+        if coords_provided:
+            ra              = ras[source_counter]
+            dec             = decs[source_counter]
+            epoch           = None if ma.is_masked(epochs[source_counter]) else epochs[source_counter]
+            equinox         = None if ma.is_masked(equinoxes[source_counter]) else equinoxes[source_counter]
+            reference       = references[source_counter]
+            other_reference = other_references[source_counter]
+            comments = None if ma.is_masked(comments[i]) else comments[i]}]
+
+            ingest_source(db, source, ra=ra, dec=dec, reference=reference, epoch=epoch, equinox=equinox, 
+                          other_reference=other_reference, comment=comment, raise_error=raise_error, search_db=search_db)
         else:
-            name_matches = None
-
-        if len(name_matches) == 1 and search_db:  # Source is already in database
-            n_existing += 1
-            msg1 = f"{i}: Skipping {source}. Already in database as {name_matches[0]}. \n "
-            logger.debug(msg1)
-
-            # Figure out if ingest name is an alternate name and add
-            db_matches = db.search_object(source, output_table='Sources', fuzzy_search=False)
-            if len(db_matches) == 0:
-                alt_names_data = [{'source': name_matches[0], 'other_name': source}]
-                try:
-                    with db.engine.connect() as conn:
-                        conn.execute(db.Names.insert().values(alt_names_data))
-                        conn.commit()
-                    logger.debug(f"{i}: Name added to database: {alt_names_data}\n")
-                    n_alt_names += 1
-                except sqlalchemy.exc.IntegrityError as e:
-                    msg = f"{i}: Could not add {alt_names_data} to database"
-                    logger.warning(msg)
-                    if raise_error:
-                        raise SimpleError(msg + '\n' + str(e))
-                    else:
-                        continue
-            continue  # Source is already in database, nothing new to ingest
-        elif len(name_matches) > 1 and search_db:  # Multiple source matches in the database
-            n_multiples += 1
-            msg1 = f"{i} Skipping {source} "
-            msg = f"{i} More than one match for {source}\n {name_matches}\n"
-            logger.warning(msg1 + msg)
-            if raise_error:
-                raise SimpleError(msg)
-            else:
-                continue
-        elif len(name_matches) == 0 or not search_db:  # No match in the database, INGEST!
-            if coords:  # Coordinates were provided as input
-                ra = ras[i]
-                dec = decs[i]
-                epoch = None if ma.is_masked(epochs[i]) else epochs[i]
-                equinox = None if ma.is_masked(equinoxes[i]) else equinoxes[i]
-            else:  # Try to get coordinates from SIMBAD
-                simbad_result_table = Simbad.query_object(source)
-                if simbad_result_table is None:
-                    n_skipped += 1
-                    msg = f"{i}: Skipping: {source}. Coordinates are needed and could not be retrieved from SIMBAD. \n"
-                    logger.warning(msg)
-                    if raise_error:
-                        raise SimpleError(msg)
-                    else:
-                        continue
-                elif len(simbad_result_table) == 1:
-                    simbad_coords = simbad_result_table['RA'][0] + ' ' + simbad_result_table['DEC'][0]
-                    simbad_skycoord = SkyCoord(simbad_coords, unit=(u.hourangle, u.deg))
-                    ra = simbad_skycoord.to_string(style='decimal').split()[0]
-                    dec = simbad_skycoord.to_string(style='decimal').split()[1]
-                    epoch = '2000'  # Default coordinates from SIMBAD are epoch 2000.
-                    equinox = 'J2000'  # Default frame from SIMBAD is IRCS and J2000.
-                    msg = f"Coordinates retrieved from SIMBAD {ra}, {dec}"
-                    logger.debug(msg)
-                else:
-                    n_skipped += 1
-                    msg = f"{i}: Skipping: {source}. Coordinates are needed and could not be retrieved from SIMBAD. \n"
-                    logger.warning(msg)
-                    if raise_error:
-                        raise SimpleError(msg)
-                    else:
-                        continue
-
-            logger.debug(f"{i}: Ingesting {source}. Not already in database. ")
-        else:
-            msg = f"{i}: unexpected condition encountered ingesting {source}"
-            logger.error(msg)
-            raise SimpleError(msg)
-
-        # Construct data to be added
-        source_data = [{'source': source,
-                        'ra': ra,
-                        'dec': dec,
-                        'reference': references[i],
-                        'epoch': epoch,
-                        'equinox': equinox,
-                        'other_references': other_references[i],
-                        'comments': None if ma.is_masked(comments[i]) else comments[i]}]
-        names_data = [{'source': source,
-                       'other_name': source}]
-
-        # Try to add the source to the database
-        try:
-            with db.engine.connect() as conn:
-                conn.execute(db.Sources.insert().values(source_data))
-                conn.commit()
-            n_added += 1
-            msg = f"Added {str(source_data)}"
-            logger.debug(msg)
-        except sqlalchemy.exc.IntegrityError:
-            if ma.is_masked(source_data[0]['reference']):  # check if reference is blank
-                msg = f"{i}: Skipping: {source}. Discovery reference is blank. \n"
-                msg2 = f"\n {str(source_data)}\n"
-                logger.warning(msg)
-                logger.debug(msg2)
-                n_skipped += 1
-                if raise_error:
-                    raise SimpleError(msg + msg2)
-                else:
-                    continue
-            elif db.query(db.Publications).filter(db.Publications.c.publication == references[i]).count() == 0:
-                # check if reference is in Publications table
-                msg = f"{i}: Skipping: {source}. Discovery reference {references[i]} is not in Publications table. \n" \
-                      f"(Add it with add_publication function.) \n "
-                msg2 = f"\n {str(source_data)}\n"
-                logger.warning(msg)
-                logger.debug(msg2)
-                n_skipped += 1
-                if raise_error:
-                    raise SimpleError(msg + msg2)
-                else:
-                    continue
-            else:
-                msg = f"{i}: Skipping: {source}. Not sure why."
-                msg2 = f"\n {str(source_data)} "
-                logger.warning(msg)
-                logger.debug(msg2)
-                n_skipped += 1
-                if raise_error:
-                    raise SimpleError(msg + msg2)
-                else:
-                    continue
-
-        # Try to add the source name to the Names table
-        try:
-            with db.engine.connect() as conn:
-                conn.execute(db.Names.insert().values(names_data))
-                conn.commit()
-            logger.debug(f"Name added to database: {names_data}\n")
-            n_names += 1
-        except sqlalchemy.exc.IntegrityError:
-            msg = f"{i}: Could not add {names_data} to database"
-            logger.warning(msg)
-            if raise_error:
-                raise SimpleError(msg)
-            else:
-                continue
+            ingest_source(db, source, raise_error=raise_error, search_db=search_db)
 
     if n_sources > 1:
         logger.info(f"Sources added to database: {n_added}")
@@ -1475,3 +1341,166 @@ def ingest_spectrum_from_fits(db, source, spectrum_fits_file):
 
     ingest_spectra(db, source, spectrum_fits_file, regime, telescope, instrument, None, obs_date, reference,
                    wavelength_units=w_unit, flux_units=flux_unit)
+
+
+def ingest_source(db, source, reference=None, ra=None, dec=None, epoch=None, equinox=None, 
+                  raise_error=True, search_db=True, other_reference=None, comment=None):
+    # TODO: ADD DOCSTRING
+    if ra is None and dec is None:
+        coords_provided = False
+    else:
+        coords_provided = True
+
+    # Find out if source is already in database or not
+    if coords_provided and search_db:
+        name_matches = find_source_in_db(db, source, ra=ra, dec=dec)
+    elif search_db:
+        name_matches = find_source_in_db(db, source)
+    elif not search_db:
+        name_matches = []
+    else:
+        name_matches = None
+
+    # Source is already in database
+    if len(name_matches) == 1 and search_db:  
+        n_existing += 1
+        msg1 = f"   Not ingesting {source}. Already in database as {name_matches[0]}. \n "
+        logger.debug(msg1)
+
+        # Figure out if source name provided is an alternate name
+        db_source_matches = db.search_object(source, output_table='Sources', fuzzy_search=False)
+        
+        # Try to add alternate source name to Names table
+        if len(db_source_matches) == 0:
+            alt_names_data = [{'source': name_matches[0], 'other_name': source}]
+            try:
+                with db.engine.connect() as conn:
+                    conn.execute(db.Names.insert().values(alt_names_data))
+                    conn.commit()
+                logger.debug(f"   Name added to database: {alt_names_data}\n")
+                n_alt_names += 1
+            except sqlalchemy.exc.IntegrityError as e:
+                msg = f"   Could not add {alt_names_data} to database"
+                logger.warning(msg)
+                if raise_error:
+                    raise SimpleError(msg + '\n' + str(e))
+                else:
+                    return
+        return  # Source is already in database, nothing new to ingest
+        
+    # Multiple source matches in the database so unable to ingest source
+    elif len(name_matches) > 1 and search_db:  
+        n_multiples += 1
+        msg1 = f"   Not ingesting {source}."
+        msg  = f"   More than one match for {source}\n {name_matches}\n"
+        logger.warning(msg1 + msg)
+        if raise_error:
+            raise SimpleError(msg)
+        else:
+            return
+    
+     # No match in the database, INGEST!
+    elif len(name_matches) == 0 or not search_db: 
+
+        # Try to get coordinates from SIMBAD if they were not provided
+        if ~coords_provided:
+            # Try to get coordinates from SIMBAD
+            simbad_result_table = Simbad.query_object(source)
+            
+            # One SIMBAD match! Using those coordinates for source.
+            if len(simbad_result_table) == 1:
+                simbad_coords = simbad_result_table['RA'][0] + ' ' + simbad_result_table['DEC'][0]
+                simbad_skycoord = SkyCoord(simbad_coords, unit=(u.hourangle, u.deg))
+                ra      = simbad_skycoord.to_string(style='decimal').split()[0]
+                dec     = simbad_skycoord.to_string(style='decimal').split()[1]
+                epoch   = '2000'  # Default coordinates from SIMBAD are epoch 2000.
+                equinox = 'J2000'  # Default frame from SIMBAD is IRCS and J2000.
+                msg     = f"   Coordinates retrieved from SIMBAD {ra}, {dec}"
+                logger.debug(msg)
+
+            # Either no match or multiple matches in SIMBAD
+            else:
+                n_skipped += 1
+                msg = f"   Not ingesting {source}. Coordinates are needed and could not be retrieved from SIMBAD. \n"
+                logger.warning(msg)
+                if raise_error:
+                    raise SimpleError(msg)
+                else:
+                    return
+
+        logger.debug(f"   Ingesting {source}.")
+
+    # Just in case other conditionals not met    
+    else:
+        msg = f"    Unexpected condition encountered ingesting {source}"
+        logger.error(msg)
+        raise SimpleError(msg)
+
+    # Construct data to be added
+    source_data = [{'source': source,
+                    'ra': ra,
+                    'dec': dec,
+                    'reference': reference,
+                    'epoch': epoch,
+                    'equinox': equinox,
+                    'other_references': other_reference,
+                    'comments': comment
+    names_data = [{'source': source,
+                    'other_name': source}]
+
+    # Try to add the source to the database
+    try:
+        with db.engine.connect() as conn:
+            conn.execute(db.Sources.insert().values(source_data))
+            conn.commit()
+        n_added += 1
+        msg = f"Added {str(source_data)}"
+        logger.debug(msg)
+    except sqlalchemy.exc.IntegrityError:
+        if ma.is_masked(source_data[0]['reference']):  # check if reference is blank
+            msg = f"{i}: Skipping: {source}. Discovery reference is blank. \n"
+            msg2 = f"\n {str(source_data)}\n"
+            logger.warning(msg)
+            logger.debug(msg2)
+            n_skipped += 1
+            if raise_error:
+                raise SimpleError(msg + msg2)
+            else:
+                continue
+        elif db.query(db.Publications).filter(db.Publications.c.publication == references[i]).count() == 0:
+            # check if reference is in Publications table
+            msg = f"{i}: Skipping: {source}. Discovery reference {references[i]} is not in Publications table. \n" \
+                    f"(Add it with add_publication function.) \n "
+            msg2 = f"\n {str(source_data)}\n"
+            logger.warning(msg)
+            logger.debug(msg2)
+            n_skipped += 1
+            if raise_error:
+                raise SimpleError(msg + msg2)
+            else:
+                continue
+        else:
+            msg = f"{i}: Skipping: {source}. Not sure why."
+            msg2 = f"\n {str(source_data)} "
+            logger.warning(msg)
+            logger.debug(msg2)
+            n_skipped += 1
+            if raise_error:
+                raise SimpleError(msg + msg2)
+            else:
+                continue
+
+    # Try to add the source name to the Names table
+    try:
+        with db.engine.connect() as conn:
+            conn.execute(db.Names.insert().values(names_data))
+            conn.commit()
+        logger.debug(f"Name added to database: {names_data}\n")
+        n_names += 1
+    except sqlalchemy.exc.IntegrityError:
+        msg = f"{i}: Could not add {names_data} to database"
+        logger.warning(msg)
+        if raise_error:
+            raise SimpleError(msg)
+        else:
+            continue
