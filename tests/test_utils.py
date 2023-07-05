@@ -13,7 +13,7 @@ from sqlalchemy import and_
 
 DB_NAME = 'temp.db'
 DB_PATH = 'data'
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 
 
 # Load the database for use in individual tests
@@ -78,37 +78,41 @@ def test_setup_db(db):
 
 def test_ingest_sources(db):
     # TODO: Test adding an alt name
-    source_data1 = Table([{'source': 'Fake 1', 'ra': 9.0673755, 'dec': 18.352889, 'reference': 'Ref 1'},
-                          {'source': 'Fake 6', 'ra': 10.0673755, 'dec': 18.352889, 'reference': 'Ref 2'},
-                          {'source': 'Fake 7', 'ra': 11.0673755, 'dec': 18.352889, 'reference': 'Ref 1'}])
-    source_data5 = Table([{'source': 'Fake 5', 'ra': 9.06799, 'dec': 18.352889, 'reference': ''}])
-    source_data8 = Table([{'source': 'Fake 8', 'ra': 9.06799, 'dec': 18.352889, 'reference': 'Ref 4'}])
 
-    ingest_sources(db, source_data1['source'], ras=source_data1['ra'], decs=source_data1['dec'],
-                   references=source_data1['reference'], raise_error=True)
-
-    ingest_sources(db, ['Barnard Star'], references='Ref 2', raise_error=True)
+    # Ingest one source
+    ingest_source(db, 'Barnard Star', reference='Ref 2', raise_error=True)
     Barnard_star = db.query(db.Sources).filter(db.Sources.c.source == 'Barnard Star').astropy()
     assert len(Barnard_star) == 1
     assert math.isclose(Barnard_star['ra'], 269.452, abs_tol=0.001)
     assert math.isclose(Barnard_star['dec'], 4.6933, abs_tol=0.001)
 
+    # Ingest multiple sources
+    source_data1 = Table([{'source': 'Fake 1', 'ra': 9.0673755, 'dec': 18.352889, 'reference': 'Ref 1'},
+                          {'source': 'Fake 6', 'ra': 10.0673755, 'dec': 18.352889, 'reference': 'Ref 2'},
+                          {'source': 'Fake 7', 'ra': 11.0673755, 'dec': 18.352889, 'reference': 'Ref 1'}])
+    ingest_sources(db, source_data1['source'], ras=source_data1['ra'], decs=source_data1['dec'],
+                   references=source_data1['reference'], raise_error=True)
+
     assert db.query(db.Sources).filter(db.Sources.c.source == 'Fake 1').count() == 1
     assert db.query(db.Sources).filter(db.Sources.c.source == 'Fake 6').count() == 1
     assert db.query(db.Sources).filter(db.Sources.c.source == 'Fake 7').count() == 1
 
+    # Try to add a source with unknown reference
+    source_data8 = Table([{'source': 'Fake 8', 'ra': 9.06799, 'dec': 18.352889, 'reference': 'Ref 4'}])
     with pytest.raises(SimpleError) as error_message:
-        ingest_sources(db, source_data8['source'], ras=source_data8['ra'], decs=source_data5['dec'],
-                       references=source_data8['reference'], raise_error=True)
+        ingest_source(db, source_data8['source'], ra=source_data8['ra'], dec=source_data8['dec'],
+                       reference=source_data8['reference'], raise_error=True)
         assert 'not in Publications table' in str(error_message.value)
 
+    # Try to add a source with a blank reference
+    source_data5 = Table([{'source': 'Fake 5', 'ra': 9.06799, 'dec': 18.352889, 'reference': ''}])
     with pytest.raises(SimpleError) as error_message:
-        ingest_sources(db, source_data5['source'], ras=source_data5['ra'], decs=source_data5['dec'],
-                       references=source_data5['reference'], raise_error=True)
-        assert 'blank' in str(error_message.value)
+        ingest_source(db, source_data5['source'], ra=source_data5['ra'], dec=source_data5['dec'],
+                       reference=source_data5['reference'], raise_error=True)
+        assert 'Discovery reference is blank' in str(error_message.value)
 
     with pytest.raises(SimpleError) as error_message:
-        ingest_sources(db, ['NotinSimbad'], references='Ref 1', raise_error=True)
+        ingest_source(db, 'NotinSimbad', reference='Ref 1', raise_error=True)
         assert 'Coordinates are needed' in str(error_message.value)
 
 

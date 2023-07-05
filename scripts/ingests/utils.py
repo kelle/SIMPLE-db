@@ -208,7 +208,7 @@ def find_publication(db, name: str = None, doi: str = None, bibcode: str = None)
 
     See Also
     --------
-    add_publication: Function to add publications in the database
+    ingest_publication: Function to add publications in the database
 
     """
 
